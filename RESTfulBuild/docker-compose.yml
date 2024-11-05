@@ -1,0 +1,237 @@
+services:
+
+  login_service:
+    build: ./login_service
+    container_name: login_service
+    image: login_service
+    ports:
+      - 8000:8000
+    depends_on:
+      - foodpostgres  
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+      - ./keys:/app/keys
+    environment:
+      - TZ=Asia/Shanghai
+      - APPID=wxcb77ffffa82960d9
+      - SECRET=191af76fda066928531750312bf941fe
+      - JWT_PRIVATE_KEY=/app/keys/private.pem
+      - JWT_ALGORITHM=RS256
+      - JWT_EXPIRATION_DAYS=1
+      - POSTGRES_URL=postgresql+asyncpg://postgres:abc123@foodpostgres:5432/postgres_db
+    networks:
+      - foodnet
+    restart: always
+
+  upload_service:
+    build: ./upload_service
+    container_name: upload_service
+    image: upload_service
+    ports:
+      - 8001:8000
+    depends_on:
+      - foodminio
+      - foodkafka
+      - foodpostgres
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+      - ./keys:/app/keys
+    environment:
+      - MINIO_ENDPOINT=foodminio:9000  # MinIO 服务地址
+      - MINIO_ROOT_USER=minioadmin  # MinIO 访问密钥
+      - MINIO_ROOT_PASSWORD=minio123  # MinIO 密钥
+      - BUCKET_NAME=photos
+      - JWT_PUBLIC_KEY=/app/keys/public.pem
+      - JWT_ALGORITHM=RS256
+      - KAFKA_BROKER=foodkafka:9092
+      - KAFKA_TOPIC=image_topic
+      - EXTERNAL_MINIO_ENDPOINT=117.72.78.52:9000  #换为IP地址，不能是localhost
+      - POSTGRES_URL=postgresql+asyncpg://postgres:abc123@foodpostgres:5432/postgres_db
+    networks:
+      - foodnet
+    restart: always
+
+  inference_service:
+    build: 
+      context: ./inference_service
+    container_name: inference_service
+    image: inference_service
+    depends_on:
+      - foodkafka
+      - foodredis
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+    environment:
+      KAFKA_BROKER: foodkafka:9092
+      MINIO_ENDPOINT: foodminio:9000  # MinIO 服务地址
+      MINIO_ACCESS_KEY: "minioadmin"  # MinIO 访问密钥
+      MINIO_SECRET_KEY: "minio123"  # MinIO 密钥
+      BUCKET_NAME: "photos"
+      REDIS_HOST: foodredis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      IMAGE_TOPIC: "image_topic"
+      HISTORY_TOPIC: "history_topic"
+    networks:
+      - foodnet
+    command: python /app/inference.py
+    restart: always
+  
+  store_service:
+    build: ./store_service
+    container_name: store_service
+    image: store_service
+    depends_on:
+      - foodkafka
+      - foodpostgres
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+    environment:
+      KAFKA_BROKER: foodkafka:9092
+      HISTORY_TOPIC: history_topic
+      POSTGRES_URL: postgresql+asyncpg://postgres:abc123@foodpostgres:5432/postgres_db
+    networks:
+      - foodnet
+    command: python /app/store.py
+    restart: always
+
+  poll_service:
+    build: ./poll_service  # Path to Dockerfile for image producer
+    container_name: poll_service
+    image: poll_service
+    ports:
+      - "8002:8000"
+    depends_on:
+      - foodredis
+      - foodpostgres
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+      - ./keys:/app/keys
+    environment:
+      - REDIS_HOST=foodredis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - JWT_PUBLIC_KEY=/app/keys/public.pem
+      - JWT_ALGORITHM=RS256
+      - POSTGRES_URL=postgresql+asyncpg://postgres:abc123@foodpostgres:5432/postgres_db
+    networks:
+      - foodnet
+    restart: always
+
+  modify_service:
+    build: ./modify_service
+    container_name: modify_service
+    image: modify_service
+    ports:
+      - "8003:8000"
+    depends_on:
+      - foodredis
+      - foodpostgres
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/systemd/timesyncd.socket:/var/run/systemd/timesyncd.socket
+      - ./Log:/app/Log
+      - ./keys:/app/keys
+    environment:
+      - REDIS_HOST=foodredis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - POSTGRES_URL=postgresql+asyncpg://postgres:abc123@foodpostgres:5432/postgres_db
+      - JWT_PUBLIC_KEY=/app/keys/public.pem
+      - JWT_ALGORITHM=RS256
+    networks:
+      - foodnet
+    restart: always
+
+  foodpostgres:
+    image: postgres:latest
+    container_name: foodpostgres
+    ports:
+      - 5433:5432
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=abc123
+      - POSTGRES_DB=postgres_db
+    volumes:
+      - ./init_postgres.sh:/docker-entrypoint-initdb.d/init_postgres.sh
+      - ./Data/ProgresData:/var/lib/postgresql/data
+    networks:
+      - foodnet
+    restart: always
+
+  foodminio:
+    image: minio/minio:latest
+    container_name: foodminio
+    ports:
+      - 9000:9000
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minio123
+    volumes:
+      - ./Data/MinioData:/data
+      - ./init_minio.sh:/init_minio.sh
+    networks:
+      - foodnet
+    restart: always
+    entrypoint: sh ./init_minio.sh
+  
+  foodkafka:
+    image: wurstmeister/kafka:latest
+    container_name: foodkafka
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: foodzookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://foodkafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CREATE_TOPICS: "image_topic:1:1,history_topic:1:1"  # 创建主题 image_topic，1个分区，1个副本
+    depends_on:
+      - foodzookeeper
+    networks:
+      - foodnet
+    restart: always
+
+  foodzookeeper:
+    image: zookeeper:latest
+    container_name: foodzookeeper
+    networks:
+      - foodnet
+    restart: always
+
+  foodredis:
+    image: redis:latest
+    container_name: foodredis
+    command: ["redis-server", "--notify-keyspace-events", "Ex"]
+    ports:
+      - "6379:6379"
+    networks:
+      - foodnet
+    restart: always
+
+  foodnginx:
+    image: nginx:stable-alpine3.20-perl  # 使用指定的 NGINX 镜像
+    container_name: foodnginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf  # 将配置文件挂载到 NGINX
+    ports:
+      - "81:80"  # 将 NGINX 的端口映射到主机的 81 端口
+    depends_on:
+      - login_service   
+      - upload_service  
+      - inference_service  
+      - store_service 
+      - poll_service
+    networks:
+      - foodnet  
+
+networks:
+  foodnet:
+    driver: bridge

@@ -1,0 +1,10 @@
+uvicorn
+fastapi 
+python-multipart
+sqlalchemy
+asyncpg
+PyJWT
+aiohttp
+pydantic
+cryptography
+redis

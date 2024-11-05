@@ -1,0 +1,15 @@
+uvicorn
+fastapi 
+python-multipart
+
+minio
+kafka-python>=2.0.2
+aiokafka
+jwt
+cryptography
+
+python-jose
+pydantic[email]
+
+sqlalchemy
+asyncpg
